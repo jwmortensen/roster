@@ -56,3 +56,8 @@ schedule <- query_db("select * from sportradar_schedule
                      where season_year = 2017
                      and season_type = 'REG'
                      and league_alias = 'NBA'")
+
+postgres_array(players_vec) -> players_array
+player_profiles <- query_db(sprintf("select * from sportradar_player_profile
+                                    where player_id = any(%s)
+                                    and season_year = 2017", players_array))
