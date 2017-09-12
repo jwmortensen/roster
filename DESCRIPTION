@@ -1,0 +1,14 @@
+Package: roster
+Title: Analysis for NBA roster construction
+Version: 0.0.0.9000
+Authors@R: person("Jacob", "Mortensen", email = "jacob.w.mortensen@gmail.com", role = c("aut", "cre"))
+Description: This package contains the code and manuscript for my analysis of NBA rosters.
+  In particular I am trying to identify redundancies and synergies in NBA rosters by using 
+  a modified version of RAPM.
+Depends: R (>= 3.3.3)
+License: MIT
+Encoding: UTF-8
+LazyData: true
+VignetteBuilder: knitr 
+RoxygenNote: 6.0.1
+Imports: dplyr

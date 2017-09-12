@@ -1,0 +1,194 @@
+---
+title: "NBA Roster Construction"
+author: "Jacob Mortensen"
+date: "`r Sys.Date()`"
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+output: rmarkdown::html_vignette
+---
+
+The goal of this project is to identify synergies and redundancies within NBA 
+rosters. Our initial idea is to use a modified version of RAPM that includes
+latent factors for different player types as a predictor variable, and then
+examine interactions between the player type factors to identify potential
+redundancies or synergies within a given roster. 
+
+First we get the data for one game, clean it and store it. We'll use this to 
+develop our basic RAPM model before extending it to a full season and adding
+latent factors. 
+
+```
+library(kingsdb)
+library(dplyr)
+con <- get_con()
+game_id <- dbGetQuery(con, "select game_id from sportradar_play_by_play
+                            where on_court_player_one_id is not null
+                            limit 1;")[[1]]
+pbp <- dbGetQuery(con, sprintf("select * from sportradar_play_by_play
+                                where game_id = '%s';", game_id))
+save(pbp, file = "data/pbp.RData")
+player_ids <- pbp %>% 
+  select(matches("on_court_player(.*)id")) %>%
+  unlist() %>%
+  unique() %>%
+  na.omit()
+team_ids <- pbp %>% 
+  select(matches("(.*)team_id")) %>%
+  unlist() %>%
+  unique() %>%
+  na.omit()
+player_array <- postgres_array(player_ids)
+team_array <- postgres_array(team_ids)
+player_query <- sprintf("select distinct player_id, 
+                         full_name,
+                         season_team_id as team_id, 
+                         season_team_market as team_market,
+                         season_team_name as team_name,
+                         season_year
+                         from sportradar_player_profile
+                         where player_id = any(%s)
+                         and season_team_id = any(%s)
+                         and season_year = 2017", 
+                         player_array, team_array)
+players <- dbGetQuery(con, player_query)
+save(players, file = "data/players.RData")
+```
+
+## Factor Analysis Model
+Here is a toy example that shows how a factor analysis model works so that 
+we can prepare to build the factor analysis model on the real data. Following
+https://rfarouni.github.io/assets/projects/BayesianFactorAnalysis/BayesianFactorAnalysis.html
+
+```{r}
+library("MASS")
+set.seed(42)
+D <-3
+P <- 10 
+N <-300
+
+mu_theta <-rep(0,D) # the mean of eta
+mu_epsilon<-rep(0,P) # the mean of epsilon
+Phi<-diag(rep(1,D))
+Psi <- diag(c(0.2079, 0.19, 0.1525, 0.20, 0.36, 0.1875, 0.1875, 1.00, 0.27, 0.27))
+l1 <- c(0.99, 0.00, 0.25, 0.00, 0.80, 0.00, 0.50, 0.00, 0.00, 0.00)
+l2 <- c(0.00, 0.90, 0.25, 0.40, 0.00, 0.50, 0.00, 0.00, -0.30, -0.30)
+l3<-  c(0.00, 0.00, 0.85, 0.80, 0.00, 0.75, 0.75, 0.00, 0.80, 0.80)
+L <-cbind(l1,l2,l3) # the loading matrix
+
+Theta <-mvrnorm(N, mu_theta, Phi) # sample factor scores
+Epsilon <-mvrnorm(N, mu_epsilon, Psi) # sample error vector
+Y<-Theta%*%t(L)+Epsilon# generate observable data
+
+```
+
+Here we visualize the data:
+```
+library("rbokeh")
+df<-data.frame(Y)
+tools <- c("pan", "wheel_zoom", "resize", "reset")
+nms <- expand.grid(names(df)[1:P], rev(names(df)[1:P]), stringsAsFactors = FALSE)
+nms$yaxis <- rep(c(TRUE, rep(FALSE, P-1)), P)
+nms$xaxis <- c(rep(FALSE, (P-1)*P), rep(TRUE, P))
+nms$h <- nms$w <- 75
+nms$h[nms$xaxis] <- nms$w[nms$yaxis] <- 90
+splom_list <- vector("list", P^2)
+
+for(i in seq_along(splom_list)) {
+   splom_list[[i]] <- figure(width = nms$w[i], height = nms$h[i],
+    tools = tools, min_border = 2) %>%
+    ly_points(nms$Var1[i], nms$Var2[i], data = df,
+       size = 1) %>%
+    x_axis(visible = nms$xaxis[i]) %>%
+    y_axis(visible = nms$yaxis[i]) 
+}
+
+grid_plot(splom_list, nrow = P, ncol = P, same_axes = TRUE, link_data = TRUE)
+```
+(For now this stan model isn't working, so we leave it commented out.)
+```
+stan_model <- "
+data {
+  int<lower=1> N;                // number of 
+  int<lower=1> P;                // number of 
+  matrix[N,P] Y;                 // data matrix of order [N,P]
+  int<lower=1> D;              // number of latent dimensions 
+}
+transformed data {
+  int<lower=1> M;
+  vector[P] mu;
+  M  = D*(P-D)+ D*(D-1)/2;  // number of non-zero loadings
+  mu = rep_vector(0.0,P);
+}
+parameters {    
+  vector[M] L_t;   // lower diagonal elements of L
+  vector<lower=0>[D] L_d;   // lower diagonal elements of L
+  vector<lower=0>[P] psi;         // vector of variances
+  real<lower=0>   mu_psi;
+  real<lower=0>  sigma_psi;
+  real   mu_lt;
+  real<lower=0>  sigma_lt;
+}
+transformed parameters{
+  cholesky_factor_cov[P,D] L;  //lower triangular factor loadings Matrix 
+  cov_matrix[P] Q;   //Covariance mat
+{
+  int idx1;
+  int idx2;
+  real zero; 
+  zero = 0;
+  for(i in 1:P){
+    for(j in (i+1):D){
+      idx1 = idx1 + 1;
+      L[i,j] = zero; //constrain the upper triangular elements to zero 
+    }
+  }
+  for (j in 1:D) {
+      L[j,j] = L_d[j];
+    for (i in (j+1):P) {
+      idx2 = idx2 + 1;
+      L[i,j] = L_t[idx2];
+    } 
+  }
+} 
+Q = L*L'+diag_matrix(psi); 
+}
+model {
+// the hyperpriors 
+   mu_psi ~ cauchy(0, 1);
+   sigma_psi ~ cauchy(0,1);
+   mu_lt ~ cauchy(0, 1);
+   sigma_lt ~ cauchy(0,1);
+// the priors 
+  L_d ~ cauchy(0,3);
+  L_t ~ cauchy(mu_lt,sigma_lt);
+  psi ~ cauchy(mu_psi,sigma_psi);
+//The likelihood
+for( j in 1:N)
+    Y[j] ~ multi_normal(mu,Q); 
+}
+"
+library("rstan")
+library("parallel")
+
+fa.data <-list(P=P,N=N,Y=Y,D=D)
+
+# a function to generate intial values that are slightly jittered for each chain.
+init_fun = function() {
+  init.values<-list(L_t=rep(0,24)+runif(1,-.1,.1),
+                    L_d=rep(.5,D)+runif(1,-.1,.1),
+                    psi=rep(.2,P)+runif(1,-.1,.1),
+                    sigma_psi=0.15+runif(1,-.1,.1),
+                    mu_psi=0.2++runif(1,-.1,.1),
+                    sigma_lt=0.5+runif(1,-.1,.1),
+                    mu_lt=0.0+runif(1,-.1,.1))
+  return(init.values); 
+} 
+
+#compile the model
+fa.model<- stan(model_code = stan_model,
+                data = fa.data,
+                chains = 4, 
+                pars=c("L","psi","sigma_psi","mu_psi","sigma_lt","mu_lt"))
+```

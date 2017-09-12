@@ -1,0 +1,18 @@
+---
+title: "NBA Roster Construction"
+author: "Jacob Mortensen"
+date: "`r Sys.Date()`"
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+output: rmarkdown::html_vignette
+---
+
+The goal of this project is to identify synergies and redundancies within NBA 
+rosters. Our initial idea is to use a modified version of RAPM that includes
+latent factors for different player types as a predictor variable, and then
+examine interactions between the player type factors to identify potential
+redundancies or synergies within a given roster. 
+
+
