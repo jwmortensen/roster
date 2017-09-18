@@ -8,187 +8,153 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 output: rmarkdown::html_vignette
 ---
-
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "..")
+```
 The goal of this project is to identify synergies and redundancies within NBA 
 rosters. Our initial idea is to use a modified version of RAPM that includes
 latent factors for different player types as a predictor variable, and then
 examine interactions between the player type factors to identify potential
 redundancies or synergies within a given roster. 
 
-First we get the data for one game, clean it and store it. We'll use this to 
-develop our basic RAPM model before extending it to a full season and adding
-latent factors. 
+First we use EFA to identify latent factors for all of the players in our
+data that we can then use in our adjusted plus minus model. Note that we
+filter out all players who played less than 250 minutes in a season.
 
-```
-library(kingsdb)
-library(dplyr)
-con <- get_con()
-game_id <- dbGetQuery(con, "select game_id from sportradar_play_by_play
-                            where on_court_player_one_id is not null
-                            limit 1;")[[1]]
-pbp <- dbGetQuery(con, sprintf("select * from sportradar_play_by_play
-                                where game_id = '%s';", game_id))
-save(pbp, file = "data/pbp.RData")
-player_ids <- pbp %>% 
-  select(matches("on_court_player(.*)id")) %>%
-  unlist() %>%
-  unique() %>%
-  na.omit()
-team_ids <- pbp %>% 
-  select(matches("(.*)team_id")) %>%
-  unlist() %>%
-  unique() %>%
-  na.omit()
-player_array <- postgres_array(player_ids)
-team_array <- postgres_array(team_ids)
-player_query <- sprintf("select distinct player_id, 
-                         full_name,
-                         season_team_id as team_id, 
-                         season_team_market as team_market,
-                         season_team_name as team_name,
-                         season_year
-                         from sportradar_player_profile
-                         where player_id = any(%s)
-                         and season_team_id = any(%s)
-                         and season_year = 2017", 
-                         player_array, team_array)
-players <- dbGetQuery(con, player_query)
-save(players, file = "data/players.RData")
-```
-
-## Factor Analysis Model
-Here is a toy example that shows how a factor analysis model works so that 
-we can prepare to build the factor analysis model on the real data. Following
-https://rfarouni.github.io/assets/projects/BayesianFactorAnalysis/BayesianFactorAnalysis.html
-
+# Create per 36 minute statistics
 ```{r}
-library("MASS")
-set.seed(42)
-D <-3
-P <- 10 
-N <-300
-
-mu_theta <-rep(0,D) # the mean of eta
-mu_epsilon<-rep(0,P) # the mean of epsilon
-Phi<-diag(rep(1,D))
-Psi <- diag(c(0.2079, 0.19, 0.1525, 0.20, 0.36, 0.1875, 0.1875, 1.00, 0.27, 0.27))
-l1 <- c(0.99, 0.00, 0.25, 0.00, 0.80, 0.00, 0.50, 0.00, 0.00, 0.00)
-l2 <- c(0.00, 0.90, 0.25, 0.40, 0.00, 0.50, 0.00, 0.00, -0.30, -0.30)
-l3<-  c(0.00, 0.00, 0.85, 0.80, 0.00, 0.75, 0.75, 0.00, 0.80, 0.80)
-L <-cbind(l1,l2,l3) # the loading matrix
-
-Theta <-mvrnorm(N, mu_theta, Phi) # sample factor scores
-Epsilon <-mvrnorm(N, mu_epsilon, Psi) # sample error vector
-Y<-Theta%*%t(L)+Epsilon# generate observable data
-
+library(dplyr)
+data("player_stats_2017REG")
+# filter out players with less than 250 minutes
+players_df <- players %>% 
+  group_by(player_id, full_name, weight, height, experience) %>%
+  summarise(minutes = sum(minutes),
+            field_goals_made = sum(field_goals_made),
+            field_goals_attempted = sum(field_goals_attempted),
+            three_points_made = sum(three_points_made),
+            three_points_attempted = sum(three_points_attempted),
+            two_points_made = sum(two_points_made),
+            two_points_attempted = sum(two_points_attempted),
+            blocked_attempts = sum(blocked_attempts),
+            free_throws_made = sum(free_throws_made),
+            free_throws_attempted = sum(free_throws_attempted),
+            offensive_rebounds = sum(offensive_rebounds),
+            defensive_rebounds = sum(defensive_rebounds),
+            rebounds = sum(rebounds),
+            assists = sum(assists),
+            turnovers = sum(turnovers),
+            steals = sum(steals),
+            blocks = sum(blocks),
+            personal_fouls = sum(personal_fouls),
+            points = sum(points)) %>%
+  ungroup() %>%
+  mutate(fg_per36 = 36 * field_goals_made / minutes,
+         fga_per36 = 36 * field_goals_attempted / minutes,
+         fg_pct = field_goals_made / field_goals_attempted,
+         three_pts_per36 = 36 * three_points_made / minutes,
+         three_pts_att_per36 = 36 * three_points_attempted / minutes,
+         three_pt_pct = three_points_made / three_points_attempted,
+         two_pts_per36 = 36 * two_points_made / minutes,
+         two_pts_att_per36 = 36 * two_points_attempted / minutes,
+         two_pt_pct = two_points_made / two_points_attempted,
+         blocked_attempts_per36 = 36 * blocked_attempts / minutes,
+         ft_per36 = 36 * free_throws_made / minutes,
+         fta_per36 = 36 * free_throws_attempted / minutes,
+         ft_pct = free_throws_made / free_throws_attempted,
+         or_per36 = 36 * offensive_rebounds / minutes,
+         dr_per36 = 36 * defensive_rebounds / minutes,
+         reb_per36 = 36 * rebounds / minutes,
+         ast_per36 = 36 * assists / minutes,
+         to_per36 = 36 * turnovers / minutes,
+         ato_ratio = assists / turnovers,
+         stl_per36 = 36 * steals / minutes,
+         blk_per36 = 36 * blocks / minutes,
+         pf_per36 = 36 * personal_fouls / minutes,
+         pts_per36 = 36 * points / minutes,
+         height = as.numeric(height),
+         weight = as.numeric(weight),
+         experience = as.numeric(experience))
 ```
 
-Here we visualize the data:
+# Exploratory factor analysis on player statistics
+Here we try EFA on several different groups of variables to see what makes the most sense.
+```{r}
+# remove variables that aren't useful for EFA
+minutes_threshold <- 250
+df1 <- players_df %>%
+  filter(minutes > minutes_threshold) %>%
+  select(matches("(per36|pct)"), ato_ratio) %>% 
+  select(-fg_per36, -fga_per36, -three_pts_per36, -three_pts_att_per36, 
+         -two_pts_per36, -two_pts_att_per36, -or_per36, -dr_per36, 
+         -ato_ratio, -fg_pct, -ft_per36, -fta_per36)
+df1$three_pt_pct[is.nan(df1$three_pt_pct)] <- 0
+df1$ft_pct[is.nan(df1$ft_pct)] <- 0
+df1 <- scale(df1)
+ev <- eigen(cov(df1))
+plot(1:length(ev$values), ev$values)
+fa1 <- factanal(df1, factors = 5, scores = "regression")
+fa1
+estimated_vals <- fa1$scores %*% t(fa1$loadings)
+clust1 <- hclust(dist(fa1$scores))
+grps <- cutree(clust1, k = 7)
+players_df %>%
+  filter(minutes > minutes_threshold) %>%
+  filter(grps == 6) %>%
+  select(full_name)
+# rind <- sample(1:nrow(df1), size = 1)
+# rbind(estimated_vals[rind, ], df1[rind, ])
+
+df2 <- players_df %>%
+  filter(minutes > minutes_threshold) %>%
+  select(height, weight, matches("per36"), ato_ratio) %>%
+  select(-fg_per36, -fga_per36, -ast_per36, -to_per36, -reb_per36, -pts_per36)
+df2 <- scale(df2)
+ev <- eigen(cov(df2), only.values = T)
+plot(1:length(ev$values), ev$values)
+fa2 <- factanal(df2, factors = 6, scores = "regression", lower = 0.05)
+fa2
+evals2 <- fa2$scores %*% t(fa2$loadings)
+# rind <- sample(1:nrow(df2), size = 1)
+# rbind(evals2[rind, ], df2[rind, ])
+
+df3 <- players_df %>%
+  filter(minutes > minutes_threshold) %>%
+  select(height, matches("(per36|pct)")) %>%
+  select(-fg_per36, -fga_per36, 
+         -three_pts_per36, -three_pts_att_per36, -three_pt_pct,
+         -two_pts_per36, -two_pts_att_per36, -two_pt_pct,
+         -ft_per36, -fta_per36, -or_per36, -dr_per36)
+df3$ft_pct[is.nan(df3$ft_pct)] <- 0
+df3 <- scale(df3)
+ev <- eigen(cov(df3), only.values = T)
+plot(1:length(ev$values), ev$values)
+fa3 <- factanal(df3, factors = 6, scores = "regression", lower = 0.05)
+fa3
+evals3 <- fa3$scores %*% t(fa3$loadings)
+# rind <- sample(1:nrow(df3), size = 1)
+# rbind(evals3[rind, ], df3[rind, ])
 ```
-library("rbokeh")
-df<-data.frame(Y)
-tools <- c("pan", "wheel_zoom", "resize", "reset")
-nms <- expand.grid(names(df)[1:P], rev(names(df)[1:P]), stringsAsFactors = FALSE)
-nms$yaxis <- rep(c(TRUE, rep(FALSE, P-1)), P)
-nms$xaxis <- c(rep(FALSE, (P-1)*P), rep(TRUE, P))
-nms$h <- nms$w <- 75
-nms$h[nms$xaxis] <- nms$w[nms$yaxis] <- 90
-splom_list <- vector("list", P^2)
 
-for(i in seq_along(splom_list)) {
-   splom_list[[i]] <- figure(width = nms$w[i], height = nms$h[i],
-    tools = tools, min_border = 2) %>%
-    ly_points(nms$Var1[i], nms$Var2[i], data = df,
-       size = 1) %>%
-    x_axis(visible = nms$xaxis[i]) %>%
-    y_axis(visible = nms$yaxis[i]) 
-}
-
-grid_plot(splom_list, nrow = P, ncol = P, same_axes = TRUE, link_data = TRUE)
+# Raw adjusted plus minus
+```{r}
+library(roster)
+library(dplyr)
+data("all_pbp")
+plus_minus_df <- plus_minus(pbp)
+# n_before <- nrow(plus_minus_df)
+# pls_min_df <- plus_minus_df %>%
+#   filter(home_points_per_poss <= 3, away_points_per_poss <= 3)
+# n_after <- nrow(pls_min_df)
+# cat(n_before - n_after, " lineups removed due to problems with their per_poss stats")
+minutes_threshold <- 0
+fit <- apm(plus_minus_df, players_df, minutes_threshold = minutes_threshold, weights = T)
+betahat <- sort(fit$beta[, 4], decreasing = T)
+players_df[match(names(betahat), players_df$player_id), ] %>% select (full_name)
+minutes_threshold <- 1000
+fit <- apm(plus_minus_df, players_df, minutes_threshold = minutes_threshold, weights = T)
+betahat <- sort(fit$beta[, 4], decreasing = T)
+players_df[match(names(betahat), players_df$player_id), ] %>% select (full_name)
 ```
-(For now this stan model isn't working, so we leave it commented out.)
-```
-stan_model <- "
-data {
-  int<lower=1> N;                // number of 
-  int<lower=1> P;                // number of 
-  matrix[N,P] Y;                 // data matrix of order [N,P]
-  int<lower=1> D;              // number of latent dimensions 
-}
-transformed data {
-  int<lower=1> M;
-  vector[P] mu;
-  M  = D*(P-D)+ D*(D-1)/2;  // number of non-zero loadings
-  mu = rep_vector(0.0,P);
-}
-parameters {    
-  vector[M] L_t;   // lower diagonal elements of L
-  vector<lower=0>[D] L_d;   // lower diagonal elements of L
-  vector<lower=0>[P] psi;         // vector of variances
-  real<lower=0>   mu_psi;
-  real<lower=0>  sigma_psi;
-  real   mu_lt;
-  real<lower=0>  sigma_lt;
-}
-transformed parameters{
-  cholesky_factor_cov[P,D] L;  //lower triangular factor loadings Matrix 
-  cov_matrix[P] Q;   //Covariance mat
-{
-  int idx1;
-  int idx2;
-  real zero; 
-  zero = 0;
-  for(i in 1:P){
-    for(j in (i+1):D){
-      idx1 = idx1 + 1;
-      L[i,j] = zero; //constrain the upper triangular elements to zero 
-    }
-  }
-  for (j in 1:D) {
-      L[j,j] = L_d[j];
-    for (i in (j+1):P) {
-      idx2 = idx2 + 1;
-      L[i,j] = L_t[idx2];
-    } 
-  }
-} 
-Q = L*L'+diag_matrix(psi); 
-}
-model {
-// the hyperpriors 
-   mu_psi ~ cauchy(0, 1);
-   sigma_psi ~ cauchy(0,1);
-   mu_lt ~ cauchy(0, 1);
-   sigma_lt ~ cauchy(0,1);
-// the priors 
-  L_d ~ cauchy(0,3);
-  L_t ~ cauchy(mu_lt,sigma_lt);
-  psi ~ cauchy(mu_psi,sigma_psi);
-//The likelihood
-for( j in 1:N)
-    Y[j] ~ multi_normal(mu,Q); 
-}
-"
-library("rstan")
-library("parallel")
 
-fa.data <-list(P=P,N=N,Y=Y,D=D)
 
-# a function to generate intial values that are slightly jittered for each chain.
-init_fun = function() {
-  init.values<-list(L_t=rep(0,24)+runif(1,-.1,.1),
-                    L_d=rep(.5,D)+runif(1,-.1,.1),
-                    psi=rep(.2,P)+runif(1,-.1,.1),
-                    sigma_psi=0.15+runif(1,-.1,.1),
-                    mu_psi=0.2++runif(1,-.1,.1),
-                    sigma_lt=0.5+runif(1,-.1,.1),
-                    mu_lt=0.0+runif(1,-.1,.1))
-  return(init.values); 
-} 
-
-#compile the model
-fa.model<- stan(model_code = stan_model,
-                data = fa.data,
-                chains = 4, 
-                pars=c("L","psi","sigma_psi","mu_psi","sigma_lt","mu_lt"))
-```
