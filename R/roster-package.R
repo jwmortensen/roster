@@ -54,16 +54,18 @@ sort_pbp <- function(pbp_df) {
   if (class(pbp_df$clock) != "Period") {
     num_hms <- sum(sapply(pbp_df$clock, check_time_format))
     if (num_hms == nrow(pbp_df)) {
-      pbp_df$clock <- lubridate::hms(pbp_df$clock)
+      sortable_clock <- lubridate::hms(pbp_df$clock)
     } else if (num_hms == 0) {
-      pbp_df$clock <- lubridate::ms(pbp_df$clock)
+      sortable_clock <- lubridate::ms(pbp_df$clock)
     } else {
       stop("inconsistent game clock format")
     }
+  } else {
+    sortable_clock <- pbp_df$clock
   }
   # didn't use dplyr to sort because of weird conflicts with lubridate.
   # after sorting it was converting 12 m 0 s to 12 m 39 s.  ¯\_(ツ)_/¯
-  pbp_df <- pbp_df[order(pbp_df$game_id, -pbp_df$period_sequence, pbp_df$clock, decreasing = T), ]
+  pbp_df <- pbp_df[order(pbp_df$game_id, -pbp_df$period_sequence, sortable_clock, decreasing = T), ]
   pbp_df
 }
 
@@ -334,4 +336,8 @@ apm <- function(pls_min_df, players_df, minutes_threshold = 0, weights = T) {
   }
 }
 
+
+view_pbp <- function(pbp_df) {
+  pbp_df %>% select(possession_id, lineup_id, clock, event_description, possession_team, points_in_possession) %>% View()
+}
 
