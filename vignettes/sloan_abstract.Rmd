@@ -1,0 +1,47 @@
+---
+title: Too much of a good thing&#58; A hierarchical latent factor model for measuring the impact of skill redundancy in professional basketball
+author: |
+  | Jacob Mortensen, Luke Bornn 
+  | Simon Fraser University
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{siunitx}
+output: 
+  pdf_document:
+    latex_engine: xelatex
+---
+
+\section{Introduction}
+After DeMarcus Cousins was traded to the Pelicans, many questioned if a lineup with two all-star big men could be successful in the modern NBA. Similarly, when Chris Paul joined the Houston Rockets some critics expressed concern about his ability to remain effective while sharing the ball with James Harden. On the contrary, when Paul George was traded to Oklahoma City, the move was universally lauded, yet no analytical methods exist to anticipate the impact that George and Russell Westbrook will have on one another.  In this paper, we present a method that allows teams to answer questions of this nature and recognize synergies and redundancies between players in the NBA.
+
+Our proposed method consists of two distinct components: (1) identifying player types using player statistics and (2) modifying the current gold-standard of basketball metrics, regularized adjusted plus minus (RAPM), to account for interactions between the identified player types. Standard RAPM metrics are useful in assessing the contribution of individual players but do not readily lend themselves to understanding player interactions, as data quickly becomes too sparse to support meaningful analysis. Aggregating player information into player categories makes examination of interaction effects feasible.
+
+
+\section{Methods}
+Our project uses play-by-play data and player statistics from all 1230 regular season games for the 2016-17 NBA season. We develop a hierarchical model that combines the traditional RAPM model with elements of latent factor models and structural equation methods. At the top of the hierarchy we have measures of player skill that are used to categorize players into latent player types. Then we quantify the impact of both individual player effects (as in RAPM) and player type interactions on the number of points scored per 100 possessions. This enables us to identify distinct skillsets within the NBA and understand how they impact one another on the court.
+
+\section{Results}
+Table 1 contains the coefficients for each player type interaction and we can use them to consider the three pairings mentioned in the introduction. DeMarcus Cousins and Anthony Davis both belong to player group 7, and with a coefficient of $-0.43$, we expect this pairing to be less productive than the sum of their individual effects. Chris Paul belongs to player group 2 and James Harden belongs to player group 6, resulting in a coefficient of 0.10 and indicating little additional synergy beyond their individual effects. Finally, Russell Westbrook and Paul George are both members of player group 6, which has a hugely positive interaction coefficient of 1.82, suggesting that they have highly complementary skillsets.
+
+\section{Conclusion}
+Identifying underlying player categories and examining their interactions provides unique insight into how different types of players will impact each other on the court. Our model improves upon existing RAPM methodology and can be used by decision-makers in the NBA to better understand potential redundancies and synergies when constructing a roster.
+
+(word count: 499) 
+
+
+\begin{table}
+\centering
+\begin{tabular}{llSSSSSSS} \toprule
+ Example Member & & {Group 1} & {Group 2} & {Group 3} & {Group 4} & {Group 5} & {Group 6} & {Group 7} \\ \midrule
+ Rudy Gobert & Group 1 &  -0.35 & -0.29 & -0.46 & -0.40 & -0.31 & 0.81 & -0.92 \\
+ Chris Paul & Group 2 &  & 0.82 & -0.04 & 0.06 & 0.78 & 0.10 & -0.26 \\
+ Jabari Parker & Group 3 &  & & -0.26 & -0.07 & -0.49 & 0.54 & -0.10 \\
+ Otto Porter & Group 4 &  & & & 0.49 & -0.09 & 0.83 & 0.09 \\
+ Marcus Smart & Group 5 & & & & & 0.03 & 0.76 & -0.33 \\
+ LeBron James & Group 6 & & & & & & 1.82 & 0.38 \\
+ Anthony Davis & Group 7 &  & & & & & & -0.43 \\
+ \bottomrule
+ \end{tabular}
+
+ \caption{Coefficients for each group interaction term, with a representative player from each group listed in the first column.}
+ \end{table}

@@ -96,12 +96,16 @@ plot(1:length(ev$values), ev$values)
 fa1 <- factanal(df1, factors = 5, scores = "regression")
 fa1
 estimated_vals <- fa1$scores %*% t(fa1$loadings)
-clust1 <- hclust(dist(fa1$scores))
+clust1 <- hclust(dist(fa1$scores), method = "ward.D2")
 grps <- cutree(clust1, k = 7)
-players_df %>%
+grp7 <- players_df %>%
   filter(minutes > minutes_threshold) %>%
-  filter(grps == 6) %>%
+  filter(grps == 7) %>%
   select(full_name)
+
+```
+```{r}
+
 # rind <- sample(1:nrow(df1), size = 1)
 # rbind(estimated_vals[rind, ], df1[rind, ])
 

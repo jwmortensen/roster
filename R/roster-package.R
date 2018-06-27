@@ -72,10 +72,12 @@ sort_pbp <- function(pbp_df) {
 #' @param pbp_df a data.frame
 #' @return data.frame
 check_sort <- function(pbp_df) {
-  sorted <- order(pbp_df$game_id, -pbp_df$period_sequence, pbp_df$clock, decreasing = T)
-  if (!isTRUE(all.equal(sorted, 1:nrow(pbp_df)))) {
-    pbp_df <- sort_pbp(pbp_df)
-  }
+  pbp_df <- pbp_df %>%
+    dplyr::arrange(game_id, period_sequence, desc(clock))
+  # sorted <- order(pbp_df$game_id, -pbp_df$period_sequence, pbp_df$clock, decreasing = T)
+  # if (!isTRUE(all.equal(sorted, 1:nrow(pbp_df)))) {
+  #   pbp_df <- sort_pbp(pbp_df)
+  # }
   pbp_df
 }
 
@@ -86,56 +88,96 @@ check_sort <- function(pbp_df) {
 #' @return data.frame that mirrors pbp_df but with an additional possession_id column
 #' @export
 assign_possession_ids <- function(pbp_df) {
-  `%>%` <- dplyr::`%>%`
-  pbp_df <- check_sort(pbp_df)
-  lag_poss_team_id <- dplyr::lag(pbp_df$possession_team_id, default = "")
-  lead_event_type <- dplyr::lead(pbp_df$event_type, default = "")
-  lead2_event_type <- dplyr::lead(pbp_df$event_type, n = 2, default = "")
-  lead_event_team_id <- dplyr::lead(pbp_df$event_team_id, default = "")
-  end_possession <- ((pbp_df$shot_made == T &                               # this condition is here to grab made shots
-                        pbp_df$event_type != "freethrowmade") |# &              # but not end the possession if there was a foul on the shot.
-                        # (lead_event_type != "shootingfoul" |
-                        #    (lead_event_type == "shootingfoul" & lead2_event_type
-                        #    pbp_df$event_team_id == lead_event_team_id)) |   # this checks if the shooting foul was called on the same team that made the shot (i.e., on the next possession)
-                     (pbp_df$event_type == "rebound" & pbp_df$rebound_type == "defensive") |
-                     (pbp_df$event_type == "freethrowmade" &
-                        grepl("(1 of 1|2 of 2|3 of 3)", pbp_df$event_description)) |
-                     (pbp_df$event_type == "turnover") |
-                     # (pbp_df$possession_team_id != lag_poss_team_id &
-                     #    !is.na(pbp_df$possession_team_id) &
-                     #    !is.na(lag_poss_team_id)) |
-                     (pbp_df$event_type == "endperiod"))
-  end_possession[is.na(end_possession)] <- F
-  end_possession_events <- pbp_df %>%
-    dplyr::filter(end_possession) %>%
-    dplyr::select(event_id) %>%
-    dplyr::distinct() %>%
-    dplyr::pull()
-  start_possession_events <- pbp_df %>%
-    dplyr::select(event_id) %>%
-    dplyr::distinct() %>%
-    dplyr::mutate(lag_event = dplyr::lag(event_id)) %>%
-    dplyr::filter(lag_event %in% end_possession_events) %>%
-    dplyr::select(event_id) %>%
-    dplyr::pull()
+  require(dplyr)
+  require(stringr)
   pbp_df <- pbp_df %>%
-    dplyr::group_by(game_id) %>%
-    dplyr::mutate(lag_event = dplyr::lag(event_id, default = "")) %>%
-    dplyr::mutate(possession_id = 1 + cumsum(event_id %in% start_possession_events &
-                                             event_id != lag_event
-                                             )) %>%
-    dplyr::mutate(lead_poss = dplyr::lead(possession_id, default = "")) %>%
-    dplyr::mutate(possession_team = if_else(lead_poss == possession_id, as.character(NA),
-                                            if_else(possession_team_id == home_team_id,
-                                            "AWAY", "HOME"))) %>%
-    dplyr::mutate(possession_team = if_else(lead_poss == possession_id, as.character(NA),
-                                            if_else(is.na(possession_team) & event_team_id == home_team_id,
-                                                    "HOME", if_else(is.na(possession_team) & event_team_id != home_team_id,
-                                                                    "AWAY", possession_team)))) %>%
-    dplyr::group_by(game_id, possession_id) %>%
-    dplyr::mutate(points_in_possession = sum(points, na.rm = T)) %>%
-    dplyr::select(-lag_event, -lead_poss) %>%
-    dplyr::ungroup()
+    arrange(game_id, period_sequence, desc(clock)) %>%
+    group_by(game_id, period_sequence, clock) %>%
+    mutate(is_freethrow = grepl(pattern = " free throw ", x = event_description)) %>%
+    mutate(listed_fta = ifelse(is_freethrow == TRUE,
+                               str_extract(string = event_description, "[0-9]+"),
+                               NA),
+                  listed_fta_tot = ifelse(is_freethrow == TRUE,
+                                          last(unlist(str_extract_all(string = event_description, "[0-9]+"))),
+                                          NA)) %>%
+    group_by(game_id, period_sequence, clock, is_freethrow) %>%
+    mutate(fta_event_id = 1:n()) %>%
+    mutate(is_freethrow_error_attempt = !listed_fta == row_number()) %>%
+    mutate(is_freethrow_error_total = !last(fta_event_id) == listed_fta_tot) %>%
+    ungroup() %>%
+    mutate(event_description = sapply(1:n(), function(x)
+      ifelse(is.na(is_freethrow_error_attempt[x]) | !is_freethrow_error_attempt[x],
+             event_description[x],
+             gsub(pattern = listed_fta[x], fta_event_id[x],
+                  x = event_description[x], fixed = TRUE)))) %>%
+    mutate(event_description = sapply(1:n(), function(x)
+      ifelse(is.na(is_freethrow_error_total[x]) | !is_freethrow_error_total[x],
+             event_description[x],
+             gsub(pattern = listed_fta_tot[x], fta_event_id[x],
+                  x = event_description[x], fixed = TRUE)))) %>%
+    select(-is_freethrow, -is_freethrow_error_attempt, -is_freethrow_error_attempt,
+           -fta_event_id, -listed_fta_tot, -listed_fta)
+  end_possession_events <- pbp_df %>%
+    group_by(game_id, period_sequence, clock) %>%
+    filter( (shot_made == TRUE & !any(event_type %in% "freethrowmade")) |
+                   (event_type %in% "rebound" & rebound_type %in% "defensive") |
+                   (event_type %in% "freethrowmade" & grepl("1 of 1", event_description) &
+                     all(event_type != "technicalfoul")) |
+                   (event_type %in% "freethrowmade" & grepl("(2 of 2|3 of 3)", event_description)) |
+                   (event_type %in% "turnover")) %>%
+    filter(grepl(x = as.character(row_number()),
+                        pattern = paste0(sapply(1:length(unique(event_type)),
+                                                function(x) last(which(event_type %in% unique(event_type)[x]))),
+                                         collapse = "|"))) %>%
+    ungroup() %>%
+    select(event_id) %>%
+    distinct() %>%
+    pull()
+
+  end_period <- pbp_df %>%
+    group_by(game_id, period_sequence, clock) %>%
+    filter(any(event_type == "endperiod")) %>%
+    filter(row_number() == n(), !(event_id %in% end_possession_events)) %>%
+    ungroup() %>%
+    select(event_id) %>%
+    distinct() %>%
+    pull()
+
+  start_possession_events <- pbp_df %>%
+    select(event_id) %>%
+    distinct() %>%
+    mutate(lag_event = lag(event_id)) %>%
+    filter(lag_event %in% c(end_possession_events, end_period)) %>%
+    select(event_id) %>%
+    pull()
+
+  pbp_df <- pbp_df %>%
+    group_by(game_id) %>%
+    mutate(lag_event = lag(event_id, default = "")) %>%
+    mutate(possession_id = 1 + cumsum(event_id %in% start_possession_events &
+                                               event_id != lag_event)) %>%
+    mutate(lead_poss = lead(possession_id, default = "")) %>%
+    tidyr::fill(possession_team_id) %>%
+    mutate(possession_team = if_else(lead_poss == possession_id, as.character(NA),
+                                            if_else((event_type %in% c("twopointmade",
+                                                                       "threepointmade",
+                                                                       "freethrowmade",
+                                                                       "turnover",
+                                                                       "offensivefoul")),
+                                                    ifelse(home_team_id == event_team_id,
+                                                           "HOME", "AWAY"),
+                                                    ifelse(home_team_id == event_team_id,
+                                                           "AWAY", "HOME")))) %>%
+    mutate(possession_team = ifelse(is.na(possession_team) &
+                                             event_type %in% "endperiod",
+                                           ifelse(home_team_id == possession_team_id,
+                                                  "HOME", "AWAY"),
+                                           possession_team)) %>%
+    group_by(game_id, possession_id) %>%
+    mutate(points_in_possession = sum(points, na.rm = T)) %>%
+    select(-lag_event, -lead_poss) %>%
+    ungroup()
+
   pbp_df
 }
 
@@ -149,23 +191,23 @@ assign_lineup_ids <- function(pbp_df) {
   `%>%` <- dplyr::`%>%`
   pbp_df <- check_sort(pbp_df)
   # sort columns to avoid duplicate lineups
-  # home_players <- pbp_df %>%
-  #   dplyr::select(dplyr::matches("home_player(.*)id"))
-  # home_players <- t(apply(home_players, 1, sort, na.last = T))
-  # away_players <- pbp_df %>%
-  #   dplyr::select(dplyr::matches("away_player(.*)id"))
-  # away_players <- t(apply(away_players, 1, sort, na.last = T))
-  # pbp_df <- pbp_df %>%
-  #   dplyr::mutate(home_player_one_id = home_players[, 1],
-  #                 home_player_two_id = home_players[, 2],
-  #                 home_player_three_id = home_players[, 3],
-  #                 home_player_four_id = home_players[, 4],
-  #                 home_player_five_id = home_players[, 5],
-  #                 away_player_one_id = away_players[, 1],
-  #                 away_player_two_id = away_players[, 2],
-  #                 away_player_three_id = away_players[, 3],
-  #                 away_player_four_id = away_players[, 4],
-  #                 away_player_five_id = away_players[, 5])
+  home_players <- pbp_df %>%
+    dplyr::select(dplyr::matches("home_player(.*)id"))
+  home_players <- t(apply(home_players, 1, sort, na.last = T))
+  away_players <- pbp_df %>%
+    dplyr::select(dplyr::matches("away_player(.*)id"))
+  away_players <- t(apply(away_players, 1, sort, na.last = T))
+  pbp_df <- pbp_df %>%
+    dplyr::mutate(home_player_one_id = home_players[, 1],
+                  home_player_two_id = home_players[, 2],
+                  home_player_three_id = home_players[, 3],
+                  home_player_four_id = home_players[, 4],
+                  home_player_five_id = home_players[, 5],
+                  away_player_one_id = away_players[, 1],
+                  away_player_two_id = away_players[, 2],
+                  away_player_three_id = away_players[, 3],
+                  away_player_four_id = away_players[, 4],
+                  away_player_five_id = away_players[, 5])
   lineup_df <- pbp_df %>%
     dplyr::select(dplyr::matches("(home|away)_player(.*)id")) %>%
     na.omit() %>%
@@ -175,20 +217,11 @@ assign_lineup_ids <- function(pbp_df) {
   pbp_df <- dplyr::left_join(pbp_df, lineup_df,
                              by = c(paste0("home_player_", text_nums, "_id"),
                                     paste0("away_player_", text_nums, "_id")))
-  # lag_event_type <- dplyr::lag(pbp_df$event_type, default = "")
-  # lag2_event_type <- dplyr::lag(pbp_df$event_type, n = 2, default = "")
-  # lag_clock <- dplyr::lag(pbp_df$clock)
-  # lag2_clock <- dplyr::lag(pbp_df$clock, n = 2, default = "")
-  # lag_lineup <- dplyr::lag(pbp_df$lineup_id, n = 2, default = 0)
-  # lag2_lineup <- dplyr::lag(pbp_df$lineup_id, n = 3, default = 0)
-  # pbp_df <- pbp_df %>%
-  #   dplyr::mutate(lineup_id = ifelse(event_type == "freethrowmade" &
-  #                                       lag_event_type == "lineupchange" &
-  #                                       lag2_event_type != "lineupchange", lag_lineup,
-  #                                     ifelse(event_type == "freethrowmade" &
-  #                                               lag_event_type == "lineupchange" &
-  #                                               lag2_event_type == "lineupchange", lag2_lineup,
-  #                                             lineup_id)))
+  pbp_df <- pbp_df %>%
+    dplyr::group_by(game_id, period_sequence, desc(clock)) %>%
+    dplyr::mutate(lineup_id = if_else(row_number() != 1, as.integer(NA), lineup_id)) %>%
+    tidyr::fill(lineup_id) %>%
+    dplyr::ungroup()
   pbp_df
 }
 
@@ -257,7 +290,7 @@ offdef_apm <- function(pbp_df, aggregate = F) {
   pbp_df <- assign_possession_ids(pbp_df)
   pbp_df <- assign_lineup_ids(pbp_df)
   pm_df <- pbp_df %>%
-    filter(!is.na(possession_team))
+    filter(!is.na(possession_team), !is.na(home_player_one_id))
   out_df <- as.data.frame(t(sapply(1:nrow(pm_df), function(i) { process_row(pm_df[i, ]) })))
   player_levels <- out_df %>%
     select(matches("player")) %>%
@@ -291,9 +324,11 @@ offdef_apm <- function(pbp_df, aggregate = F) {
   colnames(O) <- paste0("offense_", player_levels)
   colnames(D) <- paste0("defense_", player_levels)
   X <- cbind(O, D)
-  y <- if (aggregate) 100 * out_df$points_per_possession else out_df$points
+  nas <- apply(X, 1, function(x) { sum(is.na(x)) })
+  y <- if (aggregate) 100 * out_df$points_per_possession else 100 * out_df$points
   w <- if (aggregate) out_df$possessions else rep(1, nrow(X))
-  fit <- cv.glmnet(X, y, alpha = 0, weights = w, intercept = F)
+  fit <- cv.glmnet(X, y, alpha = 0, weights = w, intercept = T)
+  fit <- glmnet(X, y, alpha = 0, weights = w, lambda = 137.4059, intercept = T)
   fit
 }
 
@@ -327,7 +362,7 @@ apm <- function(pls_min_df, players_df, minutes_threshold = 0, weights = T) {
     fit <- glmnet(X, pls_min_df$pls_min,
                   weights = w,
                   alpha = 0,
-                  intercept = F)
+                  intercept = T)
     fit
   } else {
     stop("at least one player_id column has mismatched factor levels.")
