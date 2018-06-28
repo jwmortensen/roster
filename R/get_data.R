@@ -92,4 +92,8 @@ get_apm_data = function(season_year) {
   list(player = player_data, pbp = pbp_data)
 }
 apm_data = get_apm_data(2018)
-save(apm_data, file = "./data/apm_data.RData")
+write.csv(apm_data$player, file = "./data/player.csv")
+write.csv(apm_data$pbp, file = "./data/pbp.csv")
+pbp = apm_data$pbp
+save(pbp, file = "./data/pbp.RData")
+save(apm_data, file = "./data/apm_data.RData", compress = T)
