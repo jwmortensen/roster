@@ -11,7 +11,7 @@ data {
 
 parameters {
   simplex[K] theta;             // mixing proportions
-  vector[D] mu[K];             // mixture component means
+  vector[D] mu[K];              // mixture component means
   cholesky_factor_corr[D] L[K]; // cholesky factor of correlation
   real<lower = 0> sigma;
 }
